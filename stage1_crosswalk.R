@@ -52,15 +52,19 @@ road_buffer_m <- 300
 impervious_cutoff <- 5
 max_cores <- 30
 
-load_cached_data <- function(path_rds, f, ...) {
+load_cached_data <- function(path_rds,
+                             f,
+                             ...,
+                             save_function = saveRDS,
+                             load_function = readRDS) {
   if (file.exists(path_rds)) {
     message(sprintf("Loading cached data from %s", path_rds))
-    return(readRDS(path_rds))
+    return(load_function(path_rds))
   } else {
     message("No cached data found; running supplied function")
     result <- f(...)
     message(sprintf("Caching data to %s", path_rds))
-    saveRDS(result, path_rds)
+    save_function(result, path_rds)
     return(result)
   }
 }
@@ -76,7 +80,7 @@ nhgis_2000_block_pops <- fread('/media/qnap3/Covariates/nhgis/output/2000_block.
                                      population = population)]
 
 # 2001 MRLC NLCD land cover
-nlcd_land_cover_2001 <- brick("/media/qnap4/MRLC NLCD/landcover/nlcd_2001_2019_change_index_l48_20210604.img")
+nlcd_land_cover_2001 <- brick("/media/qnap4/MRLC NLCD/landcover/nlcd_2001_land_cover_l48_20210604.img")
 nlcd_crs <- st_crs(nlcd_land_cover_2001)
 
 # 2001 MRLC NLCD impervious surface
@@ -97,6 +101,11 @@ tiger_2010 <- st_read("/media/qnap3/ShapeFiles/Polygons/TIGER2010/zcta5/tl_2010_
 # can be parallelized this way?
 current_statefp <- "25"
 
+# 2000 TIGER tracts
+tiger_tracts_2000 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2000/tracts/tl_2010_%s_tract00.shp", current_statefp) %>%
+  st_read() %>%
+  st_transform(nlcd_crs)
+
 # 2000 TIGER blocks
 tiger_blocks_2000 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2000/blocks/tl_2010_%s_tabblock00.shp", current_statefp) %>%
   st_read() %>%
@@ -114,7 +123,13 @@ tiger_roads_2010 <- sprintf("/media/qnap3/ShapeFiles/Lines/TIGER2010/roads/tl_20
   bind_rows() %>%
   st_transform(nlcd_crs)
 
-# Preprocessing -----------------------------------------------------------
+# Binary dasymetric (BD) interpolation ------------------------------------
+
+# Load the entire reference area into memory for faster processing
+reference_raster <- readAll(crop(
+  nlcd_land_cover_2001,
+  extent(st_buffer(tiger_tracts_2000, road_buffer_m))
+))$Layer_1
 
 ## Rasterize blocks ----
 
@@ -123,37 +138,104 @@ blocks_to_rasterize <- tiger_blocks_2000 %>%
   left_join(nhgis_2000_block_pops, on = "geoid") %>%
   mutate(geoid = as.numeric(geoid)) # for raster storage
 
-reference_raster <- readAll(crop(
-  nlcd_land_cover_2001,
-  extent(blocks_to_rasterize)
-))
-
-cluster <- makeSOCKcluster(max_cores)
-registerDoSNOW(cluster)
-on.exit(stopCluster(cluster))
-
 bar <- progress_bar$new(
   "* Rasterizing geographies :current/:total (:percent) [:bar] eta :eta",
   total = nrow(blocks_to_rasterize)
 )
-blocks_rasterized <- foreach(
-  i = 1:nrow(blocks_to_rasterize),
-  .packages = c("progress", "sf"),
-  .options.snow = list(progress = function(n) bar$tick())
-) %dopar% {
-  block <- blocks_to_rasterize[i,]
-  return(fasterize::fasterize(
-    block,
-    raster::crop(nlcd_land_cover_2001$Layer_1, block),
-    "geoid"
-  ))
-}
-stopCluster(cluster)
+blocks_rasterized <- lapply(
+  1:nrow(blocks_to_rasterize),
+  function(i) {
+    bar$tick()
+    block <- blocks_to_rasterize[i,]
+    return(fasterize(block, crop(reference_raster, block), "geoid"))
+  }
+)
 
-message("Merging rasterized geographies")
-blocks_rasterized <- do.call(merge, blocks_rasterized)
+message("Merging and cropping rasterized geographies")
+blocks_rasterized <- crop(do.call(merge, blocks_rasterized), blocks_to_rasterize)
 
-# Binary dasymetric (BD) mapping ------------------------------------------
+writeRaster(blocks_rasterized, sprintf("output/%s_blocks_2000.tif", current_statefp))
+
+## Buffer and rasterize roads ----
+# Here we will be looping over tracts because we can afford to process larger
+# areas and move a little faster
+
+bar <- progress_bar$new(
+  "* Rasterizing roads :current/:total (:percent) [:bar] eta :eta",
+  total = nrow(tiger_tracts_2000)
+)
+roads_rasterized <- lapply(
+  1:nrow(tiger_tracts_2000),
+  function(i) {
+    bar$tick()
+    tract <- tiger_tracts_2000[i,]
+    # tryCatch block because some areas may have no roads at all; leads to
+    # Error in fasterize(...): sf geometry must be POLYGON or MULTIPOLYGON
+    tryCatch(
+      {
+        road_buffer <- tiger_roads_2010 %>%
+          st_intersection(tiger_tracts_2000[i,]) %>%
+          pull(geometry) %>%
+          st_buffer(road_buffer_m) %>%
+          st_union() %>%
+          st_as_sf()
+        return(fasterize(road_buffer, crop(reference_raster, road_buffer)))
+      },
+      error = function(...) return(NA)
+    )
+  }
+)
+
+# May be a good time to check on those null indices before they get omitted and
+# confirm that it was due to no roads
+roads_rasterized <- na.omit(roads_rasterized)
+
+message("Merging rasterized road buffers")
+roads_rasterized <- do.call(merge, roads_rasterized)
+
+writeRaster(roads_rasterized, sprintf("output/%s_roads_buffered.tif", current_statefp))
+
+## BD interpolation of population counts ----
+
+# Start with the road buffer
+bd_raster <- extend(crop(roads_rasterized, blocks_rasterized), blocks_rasterized)
+plot(bd_raster)
+
+# Remove all areas with <5% impervious surface
+nlcd_impervious_2001_cropped <- crop(nlcd_impervious_2001, blocks_rasterized)
+stopifnot(compareRaster(bd_raster, nlcd_impervious_2001_cropped))
+bd_raster[nlcd_impervious_2001_cropped < 5] <- NA
+plot(bd_raster)
+
+# Remove all water bodies
+# https://www.mrlc.gov/sites/default/files/NLCD_Colour_Classification_Update.jpg
+nlcd_land_cover_2001_cropped <- crop(nlcd_land_cover_2001, blocks_rasterized)
+stopifnot(compareRaster(bd_raster, nlcd_land_cover_2001_cropped))
+bd_raster[nlcd_impervious_2001_cropped == 11] <- NA
+plot(bd_raster)
+
+# Subset rasterized blocks to this
+bd_raster <- mask(blocks_rasterized, bd_raster)
+plot(bd_raster)
+
+writeRaster(roads_rasterized, sprintf("output/%s_inhabited_areas_2000.tif", current_statefp))
+
+# Divide up block populations evenly across all relevant 30-meter grid cells
+cell_pops <- table(bd_raster[]) %>%
+  as.data.frame() %>%
+  transmute(
+    geoid = as.numeric(as.character(Var1)),
+    cells = Freq
+  ) %>%
+  left_join(st_drop_geometry(blocks_to_rasterize)) %>%
+  mutate(cell_population = population / cells)
+bd_raster[] <- left_join(
+  data.frame(geoid = bd_raster[]),
+  cell_pops
+)$cell_population
+plot(bd_raster)
+
+writeRaster(roads_rasterized, sprintf("output/%s_population_2000.tif", current_statefp))
 
 # Target-Density Weighting (TDW) weights calculation ----------------------
 
