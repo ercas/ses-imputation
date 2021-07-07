@@ -37,9 +37,9 @@
 #
 # Contact: Edgar Castro <edgar_castro@g.harvard.edu>
 
-library(doSNOW)
-library(parallel)
-library(progress)
+#library(doSNOW)
+#library(parallel)
+#library(progress)
 
 library(data.table)
 library(dplyr)
@@ -48,7 +48,7 @@ library(sf)
 
 road_buffer_m <- 300
 impervious_cutoff <- 5
-max_cores <- 30
+max_cores <- 20
 
 # State FIPS code to produce crosswalk for. Could theoretically do the entire US
 # at once but that would cause long periods of unresponsiveness... also maybe
@@ -56,7 +56,7 @@ max_cores <- 30
 #
 # This will be overwritten if a state FIPS code is provided as a CLI arg
 #current_statefp <- "25"
-current_statefp <- "04"
+current_statefp <- "39"
 
 # Very important! We will be generating very large (~1GB) temporary files -
 # don't want to use up all of /tmp/ (default location)
@@ -131,9 +131,9 @@ tiger_blocks_2000 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2000/blocks/
   st_transform(nlcd_crs)
 
 # 2010 TIGER blocks
-tiger_blocks_2010 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2010/blocks/tl_2010_%s_tabblock10.shp", current_statefp) %>%
-  st_read() %>%
-  st_transform(nlcd_crs)
+#tiger_blocks_2010 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2010/blocks/tl_2010_%s_tabblock10.shp", current_statefp) %>%
+#  st_read() %>%
+#  st_transform(nlcd_crs)
 
 # 2010 TIGER roads
 tiger_roads_2010 <- sprintf("/media/qnap3/ShapeFiles/Lines/TIGER2010/roads/tl_2010_%s*_roads.shp", current_statefp) %>%
@@ -153,7 +153,7 @@ reference_raster <- crop(
 # We need to create a new variable here called rasterized_id because the raster
 # package has some issues saving GEOIDs to GeoTIFFs
 blocks_to_rasterize <- load_cached_data(
-  sprintf("output/%s_blocks_2000.gpkg", current_statefp),
+  sprintf("output/bd-pops/%s_blocks_2000.gpkg", current_statefp),
   function() {
     tiger_blocks_2000 %>%
       transmute(geoid = BLKIDFP00) %>%
@@ -168,7 +168,7 @@ blocks_to_rasterize <- load_cached_data(
 ## Rasterize blocks ----
 
 blocks_rasterized <- load_cached_data(
-  sprintf("output/%s_blocks_2000.tif", current_statefp),
+  sprintf("output/bd-pops/%s_blocks_2000.tif", current_statefp),
   function() {
     message("Rasterizing blocks")
    blocks_to_rasterize_vect <- vect(blocks_to_rasterize)
@@ -187,9 +187,9 @@ blocks_rasterized <- load_cached_data(
 # areas and move a little faster
 
 roads_rasterized <- load_cached_data(
-  sprintf("output/%s_roads_buffered.tif", current_statefp),
+  sprintf("output/bd-pops/%s_roads_buffered.tif", current_statefp),
   function() {
-    message("Buffering roads")
+    message(sprintf("Buffering roads %s meters", road_buffer_m))
     roads_to_rasterize <- tiger_roads_2010 %>%
         pull(geometry) %>%
         st_buffer(road_buffer_m) %>%
@@ -207,10 +207,42 @@ roads_rasterized <- load_cached_data(
   load_function = loadRaster
 )
 
+# Parallel version
+# roads_rasterized <- load_cached_data(
+#   sprintf("output/bd-pops/%s_roads_buffered.tif", current_statefp),
+#   function() {
+#     message(sprintf("Building SNOW cluster with %d cores", max_cores))
+#     cluster <- makeSOCKcluster(max_cores)
+#     registerDoSNOW(cluster)
+#     on.exit(stopCluster(cluster))
+#    
+#     bar <- progress_bar$new(
+#       sprintf("Buffering roads %s meters :current/:total (:percent) [:bar] eta :eta", road_buffer_m),
+#       total = nrow(tiger_roads_2010)
+#     )
+#     results <- foreach(
+#       road = tiger_roads_2010$geometry,
+#       .packages = c("progress", "sf"),
+#       .options.snow = list(progress = function(n) bar$tick())
+#     ) %dopar% {
+#       return(st_buffer(road, road_buffer_m))
+#     }
+# 
+#     message("Rasterizing roads")
+#     results <- vect(st_as_sfc(results))
+#     return(rasterize(
+#         results,
+#         crop(reference_raster, results)
+#     ))
+#   },
+#   save_function = writeRaster,
+#   load_function = loadRaster
+# )
+
 ## Calculation of inhabited areas ----
 
 inhabited_areas <- load_cached_data(
-  sprintf("output/%s_inhabited_areas_2000.tif", current_statefp),
+  sprintf("output/bd-pops/%s_inhabited_areas_2000.tif", current_statefp),
   function() {
     # Start with the road buffer
     message("Adjusting road buffer extents")
@@ -242,12 +274,12 @@ inhabited_areas <- load_cached_data(
 ## BD interpolation of population counts ----
   
 bd_raster <- load_cached_data(
-  sprintf("output/%s_population_2000.tif", current_statefp),
+  sprintf("output/bd-pops/%s_population_2000.tif", current_statefp),
   function() {
     # Start with the inhabited areas from earlier - read from disk so we aren't
     # manipulating the original values
     result <- loadRaster(
-      sprintf("output/%s_inhabited_areas_2000.tif", current_statefp)
+      sprintf("output/bd-pops/%s_inhabited_areas_2000.tif", current_statefp)
     )
     
     # Divide up block populations evenly across all relevant 30-meter grid cells
