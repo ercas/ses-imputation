@@ -9,6 +9,8 @@ library(terra)
 
 terraOptions(tempdir = "temp/")
 
+output_directory <- "output/bd-popdens/"
+
 statefps <- str_extract(Sys.glob("output/bd-pops/*_population_2000.tif"), "[0-9]+")
 
 args <- commandArgs(trailingOnly=TRUE)
@@ -19,8 +21,10 @@ if (length(args) > 0) {
   statefps <- args[1]
 }
 
+dir.create(output_directory, showWarnings = FALSE)
+
 for (statefp in statefps) {
-  output_file <- sprintf("output/bd-pops/%s_population_2000.tif", statefp)
+  output_file <- sprintf("%s/%s_population_density_2000.tif", output_directory, statefp)
   if (file.exists(output_file)) {
     message(sprintf("Skipping state with FIPS code %s", statefp))
   } else {
