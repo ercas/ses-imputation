@@ -33,6 +33,8 @@
 #         rm -v ${statefp}*
 #       fi
 #     done
+#
+# Contact: Edgar Castro <edgar_castro@g.harvard.edu>
 
 library(sf)
 library(stringr)
