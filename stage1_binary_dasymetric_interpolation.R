@@ -18,7 +18,19 @@
 # 4. Mask Census blocks to the inhabited zones
 # 5. Spread block population evenly across inhabited zone
 #
+# To combine into a single, nationwide file:
+#
+# 1. Build a VRT that points to the individual GeoTIFFs
+#
+#     gdalbuildvrt temp.vrt output/bd-pops/*population_2000.tif
+#
+# 2. Convert the VRT into a GeoTIFF and clean up
+#
+#     gdal_translate -of GTiff -co "COMPRESS=LZW" -co "BIGTIFF=YES" temp.vrt output/bd-pops-conus.tif
+#     rm temp.vrt
+#
 # Primary reference material:
+#
 # 1. IPUMS. (n.d.). 2000 Block Data Standardized to 2010 Geography. IPUMS NHGIS.
 # https://www.nhgis.org/documentation/time-series/2000-blocks-to-2010-geog.
 # 2. Ruther, M., Leyk, S., & Buttenfield, B. P. (2015). "Comparing the effects
@@ -54,8 +66,7 @@ bd_output_directory <- "output/bd-pops/"
 # can be parallelized this way?
 #
 # This will be overwritten if a state FIPS code is provided as a CLI arg
-#current_statefp <- "25"
-current_statefp <- "39"
+current_statefp <- "25"
 
 # Very important! We will be generating very large (~1GB) temporary files -
 # don't want to use up all of /tmp/ (default location)
@@ -107,14 +118,6 @@ nlcd_crs <- crs(nlcd_land_cover_2001)
 # 2001 MRLC NLCD impervious surface
 nlcd_impervious_2001 <- rast("/media/qnap4/MRLC NLCD/impervious/nlcd_2001_impervious_l48_20210604.img")
 
-# 2000 TIGER geographies to be crosswalked
-tiger_2000 <- st_read("/media/qnap3/ShapeFiles/Polygons/TIGER2000/zcta5/tl_2010_us_zcta500.shp") %>%
-  st_transform(nlcd_crs)
-
-# 2010 TIGER geographies to use as reference
-tiger_2010 <- st_read("/media/qnap3/ShapeFiles/Polygons/TIGER2010/zcta5/tl_2010_us_zcta510.shp") %>%
-  st_transform(nlcd_crs)
-
 ## State-specific data ----
 
 # 2000 TIGER tracts
@@ -126,11 +129,6 @@ tiger_tracts_2000 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2000/tracts/
 tiger_blocks_2000 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2000/blocks/tl_2010_%s_tabblock00.shp", current_statefp) %>%
   st_read() %>%
   st_transform(nlcd_crs)
-
-# 2010 TIGER blocks
-#tiger_blocks_2010 <- sprintf("/media/qnap3/ShapeFiles/Polygons/TIGER2010/blocks/tl_2010_%s_tabblock10.shp", current_statefp) %>%
-#  st_read() %>%
-#  st_transform(nlcd_crs)
 
 # 2010 TIGER roads
 tiger_roads_2010 <- sprintf("/media/qnap3/ShapeFiles/Lines/TIGER2010/roads/tl_2010_%s*_roads.shp", current_statefp) %>%
