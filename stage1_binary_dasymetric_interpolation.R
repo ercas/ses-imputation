@@ -1,39 +1,30 @@
-# General approach: Binary dasymmetric interpolation
+# Binary dasymetric interpolation of Census population
 #
-# This is a simplification of the NHGIS approach, which uses both 
+# This script generates a population surface at the resolution of the MRLC NLCD
+# 2001 (30-meter grid) with population interpolated dasymetrically across each
+# block group. In short, the process is as follows:
 #
-# General formula: \hat{y}_t = \sum_s{\frac{\left(\frac{A_st}{A_t}\right)z_t}{\sum_\tau\left(\frac{A_{s\tau}}{A_\tau}\right)}y_s} where
-# * s = The "source zone", i.e. the data set where the original geographies came
-#       from, i.e. the 2000 Census.
-# * t = The "target zone", i.e. the data set where the geographies that we want
-#       to interpolate to came from, i.e. the 2010 Census.
-# * \hat{y}_t = The estimated value of the given Census variable in the target
-#       zone, i.e. the value according to 2010 Census geographies.
-# * y_s = The value of the given Census variable in the source zone, i.e. the
-#       original value in the original geographies (2000 Census).
-# * z_t = The value of the given Census variable in the target zone, i.e. the
-#       value in a 2010 Census geography.
-# * z_\tau = Similar to z_t, but idexing target zone intersections with \tau.
-# * A_st = The area of a single intersection between s and t, indexing source
-#       zone intersections. There may be multiple, e.g. if a 2000 geography
-#       intersects 3 different 2010 geographies.
-# * A_s = The area of a geography from the source zone, i.e. a 2000 geography.
-# * A_s\tau = Similar to A_st, but indexing target zone intersections instead.
-#       There may be multiple, e.g. if a 2010 geography intersects 3 different
-#       2000 geographies.
-# * A_t = The area of a geography from the target zone, i.e. a 2010 geography.
-#
-# For reference, the simple areal-weighting formula is \hat{y}_t = \sum_s{\frac{A_{st}}{A_s}y_s}
-# 
+# 1. Retrieve data:
+#     * Block-level population counts from the 2000 decennial Census
+#     * 2000 block geographies from TIGER/Line
+#     * 2010 road geographies from TIGER/Line
+#     * NLCD land cover and impervious surface rasters from MRLC
+# 2. Rasterize Census blocks
+# 3. Delineate "inhabited zones":
+#     1. Buffer road geographies by 300 meters and rasterize
+#     2. Subtract areas with impervious surface percentage <5% from the
+#        rasterized roads
+#     3. Subtract water bodies from rasterized roads
+# 4. Mask Census blocks to the inhabited zones
+# 5. Spread block population evenly across inhabited zone
 #
 # Primary reference material:
-# 1. Ruther, M., Leyk, S., & Buttenfield, B. P. (2015). "Comparing the effects
+# 1. IPUMS. (n.d.). 2000 Block Data Standardized to 2010 Geography. IPUMS NHGIS.
+# https://www.nhgis.org/documentation/time-series/2000-blocks-to-2010-geog.
+# 2. Ruther, M., Leyk, S., & Buttenfield, B. P. (2015). "Comparing the effects
 # of an NLCD-derived dasymetric refinement on estimation accuracies for multiple
 # areal interpolation methods." GIScience & Remote Sensing 52(2), 158-178.
 # http://dx.doi.org/10.1080/15481603.2015.1018856
-# 2. Schroeder, J. P. 2007. “Target-Density Weighting Interpolation and
-# Uncertainty Evaluation for Temporal Analysis of Census Data.” Geographical
-# Analysis 39: 311–335. http://dx.doi.org/10.1111/j.1538-4632.2007.00706.x
 #
 # Contact: Edgar Castro <edgar_castro@g.harvard.edu>
 
@@ -46,9 +37,17 @@ library(dplyr)
 library(terra)
 library(sf)
 
+# Distance, in meters, to buffer around roads in calculating inhabited areas
 road_buffer_m <- 300
+
+# Percent impervious area under which land is considered uninhabited
 impervious_cutoff <- 5
-max_cores <- 20
+
+# Number of cores to use in road buffering
+#max_cores <- 20
+
+# Directory to save output to
+bd_output_directory <- "output/bd-pops/"
 
 # State FIPS code to produce crosswalk for. Could theoretically do the entire US
 # at once but that would cause long periods of unresponsiveness... also maybe
@@ -61,6 +60,8 @@ current_statefp <- "39"
 # Very important! We will be generating very large (~1GB) temporary files -
 # don't want to use up all of /tmp/ (default location)
 terraOptions(tempdir = "temp/")
+
+dir.create(bd_output_directory, showWarnings = FALSE)
 
 load_cached_data <- function(path_rds,
                              f,
@@ -77,10 +78,6 @@ load_cached_data <- function(path_rds,
     save_function(result, path_rds)
     return(result)
   }
-}
-
-loadRaster <- function(...) {
-  rast(...)
 }
 
 # Load data ---------------------------------------------------------------
@@ -153,7 +150,7 @@ reference_raster <- crop(
 # We need to create a new variable here called rasterized_id because the raster
 # package has some issues saving GEOIDs to GeoTIFFs
 blocks_to_rasterize <- load_cached_data(
-  sprintf("output/bd-pops/%s_blocks_2000.gpkg", current_statefp),
+  sprintf("%s/%s_blocks_2000.gpkg", bd_output_directory, current_statefp),
   function() {
     tiger_blocks_2000 %>%
       transmute(geoid = BLKIDFP00) %>%
@@ -168,7 +165,7 @@ blocks_to_rasterize <- load_cached_data(
 ## Rasterize blocks ----
 
 blocks_rasterized <- load_cached_data(
-  sprintf("output/bd-pops/%s_blocks_2000.tif", current_statefp),
+  sprintf("%s/%s_blocks_2000.tif", bd_output_directory, current_statefp),
   function() {
     message("Rasterizing blocks")
    blocks_to_rasterize_vect <- vect(blocks_to_rasterize)
@@ -179,15 +176,17 @@ blocks_rasterized <- load_cached_data(
     ))
   },
   save_function = writeRaster,
-  load_function = loadRaster
+  load_function = rast
 )
 
 ## Buffer and rasterize roads ----
 # Here we will be looping over tracts because we can afford to process larger
 # areas and move a little faster
+#
+# UPDATE: see stage1alt_postgis_buffer.R for faster solution using PostGIS
 
 roads_rasterized <- load_cached_data(
-  sprintf("output/bd-pops/%s_roads_buffered.tif", current_statefp),
+  sprintf("%s/%s_roads_buffered.tif", bd_output_directory, current_statefp),
   function() {
     message(sprintf("Buffering roads %s meters", road_buffer_m))
     roads_to_rasterize <- tiger_roads_2010 %>%
@@ -204,7 +203,7 @@ roads_rasterized <- load_cached_data(
     ))
   },
   save_function = writeRaster,
-  load_function = loadRaster
+  load_function = rast
 )
 
 # Parallel version
@@ -236,13 +235,13 @@ roads_rasterized <- load_cached_data(
 #     ))
 #   },
 #   save_function = writeRaster,
-#   load_function = loadRaster
+#   load_function = rast
 # )
 
 ## Calculation of inhabited areas ----
 
 inhabited_areas <- load_cached_data(
-  sprintf("output/bd-pops/%s_inhabited_areas_2000.tif", current_statefp),
+  sprintf("%s/%s_inhabited_areas_2000.tif", bd_output_directory, current_statefp),
   function() {
     # Start with the road buffer
     message("Adjusting road buffer extents")
@@ -268,18 +267,18 @@ inhabited_areas <- load_cached_data(
     return(result)
   },
   save_function = writeRaster,
-  load_function = loadRaster
+  load_function = rast
 )
 
 ## BD interpolation of population counts ----
   
 bd_raster <- load_cached_data(
-  sprintf("output/bd-pops/%s_population_2000.tif", current_statefp),
+  sprintf("%s/%s_population_2000.tif", bd_output_directory, current_statefp),
   function() {
     # Start with the inhabited areas from earlier - read from disk so we aren't
     # manipulating the original values
-    result <- loadRaster(
-      sprintf("output/bd-pops/%s_inhabited_areas_2000.tif", current_statefp)
+    result <- rast(
+      sprintf("%s/%s_inhabited_areas_2000.tif", bd_output_directory, current_statefp)
     )
     
     # Divide up block populations evenly across all relevant 30-meter grid cells
@@ -302,7 +301,7 @@ bd_raster <- load_cached_data(
     return(result)
   },
   save_function = writeRaster,
-  load_function = loadRaster
+  load_function = rast
 )
 
 # Diagnostics - unreachable code so doesn't run in non-interactive mode
