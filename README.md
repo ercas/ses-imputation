@@ -12,3 +12,4 @@ The crosswalk process uses Binary Dasymetric (BD) interpolation combined with a 
 
 1. IPUMS. (n.d.). 2000 Block Data Standardized to 2010 Geography. IPUMS NHGIS. https://www.nhgis.org/documentation/time-series/2000-blocks-to-2010-geog. 
 2. Ruther, M., Leyk, S., & Buttenfield, B. P. (2015). Comparing the effects of an NLCD-derived dasymetric refinement on estimation accuracies for multiple areal interpolation methods. GIScience & Remote Sensing, 52(2), 158–178. https://doi.org/10.1080/15481603.2015.1018856 
+2. Schroeder, J. P. 2007. “Target-Density Weighting Interpolation and Uncertainty Evaluation for Temporal Analysis of Census Data.” Geographical Analysis 39: 311–335. http://dx.doi.org/10.1111/j.1538-4632.2007.00706.x
