@@ -181,7 +181,7 @@ blocks_rasterized <- load_cached_data(
 # Here we will be looping over tracts because we can afford to process larger
 # areas and move a little faster
 #
-# UPDATE: see stage1alt_postgis_buffer.R for faster solution using PostGIS
+# See stage1alt_rasterize_postgis_buffer.R for faster solution using PostGIS
 
 roads_rasterized <- load_cached_data(
   sprintf("%s/%s_roads_buffered.tif", bd_output_directory, current_statefp),
@@ -302,7 +302,9 @@ bd_raster <- load_cached_data(
   load_function = rast
 )
 
-# Diagnostics - unreachable code so doesn't run in non-interactive mode
+# Diagnostics -------------------------------------------------------------
+
+# Unreachable code so doesn't run in non-interactive mode
 if (FALSE) {
   missing_geoids <- setdiff(blocks_to_rasterize$geoid, cell_pops$geoid)
   length(missing_geoids)
@@ -316,10 +318,3 @@ if (FALSE) {
     filter(geoid %in% missing_geoids, population == 0) %>%
     nrow()
 }
-
-# Target-Density Weighting (TDW) weights calculation ----------------------
-
-# BD-TDW crosswalk --------------------------------------------------------
-
-# WIP / scratchpad --------------------------------------------------------
-
