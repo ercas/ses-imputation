@@ -118,6 +118,7 @@ tiger_2010 <- load_cached_data(
   save_function = st_write,
   load_function = st_read
 )
+
 tiger_2010_nlcd <- load_cached_data(
   "output/zctas/zcta5_2010_nlcd.gpkg",
   function() {
@@ -130,8 +131,8 @@ tiger_2010_nlcd <- load_cached_data(
 )
 
 # BD-interpolated population from stage 1
-# bd_pops <- rast("output/bd-pops-conus.tif")
-# bd_pops_raster <- raster::raster("output/bd-pops-conus.tif") # for exactextractr
+bd_pops <- rast("output/bd-pops-conus.tif")
+bd_popdens <- rast("output/bd-popdens-conus.tif")
 
 ## Calculate intersections ----
 
@@ -432,3 +433,129 @@ tdw <- load_cached_data(
   save_function = fwrite,
   load_function = fread
 )
+tdw[, `:=` (ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+            ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)))]
+
+# Diagnostics -------------------------------------------------------------
+
+library(ggplot2)
+library(rasterVis) # For gplot
+library(viridis)
+
+tiger_2000_dt <- as.data.table(tiger_2000)
+tiger_2000_nlcd_dt <- as.data.table(tiger_2000_nlcd)
+
+plot_tdw <- function(debug_zcta) {
+  # sf of the target ZCTA
+  debug_target <- filter(tiger_2010, ZCTA5CE10 == debug_zcta)
+  print(debug_target)
+  
+  # sf of the source ZCTAs with their TDWs
+  debug_tdw_sf <- st_as_sf(
+    tiger_2000_dt[tdw[ZCTA5CE10 == debug_zcta], on = "ZCTA5CE00"]
+  )
+  
+  ggplot() +
+    geom_sf(
+      aes(fill = log(tdw)),
+      data = debug_tdw_sf,
+      lwd = NA
+    ) +
+    geom_sf(
+      data = debug_target,
+      fill = NA, color = "red", lwd = 1.5,
+    ) +
+    geom_sf_text(
+      aes(label = ZCTA5CE00),
+      data = debug_tdw_sf,
+      color = "white"
+    ) +
+    labs(
+      title = sprintf("Target-density weights for %s", debug_zcta),
+      subtitle = sprintf("2000 ZCTA GEOIDs (%s) shown in white text", nrow(debug_tdw_sf)),
+      x = "Longitude",
+      y = "Latitude"
+    ) %>%
+    return()
+}
+
+plot_bd_popdens <- function(debug_zcta) {
+  debug_target_nlcd <- filter(tiger_2010_nlcd, ZCTA5CE10 == debug_zcta)
+  
+  debug_tdw_sf_nlcd <- st_as_sf(
+    tiger_2000_nlcd_dt[tdw[ZCTA5CE10 == debug_zcta], on = "ZCTA5CE00"]
+  )
+  
+  # For some reason, st_bbox doesn't give us the correct extents - manual calc
+  bounds <- as.data.table(do.call(rbind, lapply(debug_tdw_sf_nlcd$geom, st_bbox)))
+  extents <- ext(min(bounds$xmin), max(bounds$xmax), min(bounds$ymin), max(bounds$ymax))
+  
+  gplot(crop(bd_popdens, extents)) +
+    geom_raster(aes(fill = value)) +
+    scale_fill_viridis(na.value = NA) +
+    geom_sf(
+      data = debug_tdw_sf_nlcd,
+      fill = NA, color = "orange", lwd = 0.5,
+      inherit.aes = FALSE
+    ) +
+    geom_sf(
+      data = debug_target_nlcd,
+      fill = NA, color = "red", lwd = 1,
+      inherit.aes = FALSE
+    ) +
+    labs(
+      title = sprintf("BD-interp. pop. dens. near %s", debug_zcta),
+      subtitle = sprintf("2000 ZCTAs (%s) shown in orange", nrow(debug_tdw_sf_nlcd)),
+      x = "Longitude",
+      y = "Latitude"
+    ) %>%
+    return()
+}
+
+# Unreachable code so doesn't run in non-interactive mode
+if (FALSE) {
+  # Harvard T.H. Chan
+  plot_tdw("02115")
+  plot_bd_popdens("02115")
+  
+  # Random
+  plot_tdw("76034")
+  plot_bd_popdens("76034")
+  
+  # Number of 2000 ZCTAs per 2010 ZCTA
+  tdw[, .N, by = "ZCTA5CE10"][order(N)]
+  plot_tdw("15767")
+  plot_bd_popdens("15767")
+  
+  # Most even spread of weights
+  tdw %>%
+    group_by(ZCTA5CE10) %>%
+    summarize(
+      n = n(),
+      median_tdw = median(tdw, na.rm = TRUE),
+      mean_tdw = mean(tdw, na.rm = TRUE)
+    ) %>%
+    filter(
+      n > 1,
+      !is.na(median_tdw)
+    ) %>%
+    arrange(-median_tdw) %>%
+    View()
+  plot_tdw("97434")
+  plot_bd_popdens("97434")
+  tdw[ZCTA5CE10 == "97434"]
+  
+  plot_tdw("25661")
+  plot_bd_popdens("25661")
+  sum(pops_2000[tdw[ZCTA5CE10 == "25661"], on = "ZCTA5CE00"]$pop_sum)
+  sum(pops_2000[tdw[ZCTA5CE10 == "25661"], on = "ZCTA5CE00"][is.na(tdw)]$pop_sum)
+  sum(pops_2000[tdw[is.na(tdw)], on = "ZCTA5CE00"]$pop_sum) - pop_hi_pr
+  sum(pops_2000$pop_sum) - pop_hi_pr
+  pop_hi_pr <- sum(pops_2000[areas_2000[is.na(area_meters)], on = "ZCTA5CE00"]$pop_sum)
+  
+  plot_tdw("")
+  plot_bd_popdens("")
+  
+  plot_tdw(sample(tiger_2010$ZCTA5CE10, 1))
+}
+
