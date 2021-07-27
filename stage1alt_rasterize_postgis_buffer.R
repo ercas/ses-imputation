@@ -19,7 +19,12 @@
 # 4. Reproject to WGS84 (most programs do not support EPSG:42303)
 #
 #     CREATE TABLE tl_2010_us_roads_epsg4326_300mbuffer AS SELECT * FROM tl_2010_us_roads_epsg42303_300mbuffer;
-#     ALTER TABLE tl_2010_us_roads_epsg4326_300mbuffer ALTER COLUMN geom TYPE Geometry(MultiPolygon, 4326) USING ST_Transform(geom, 4326
+#     ALTER TABLE tl_2010_us_roads_epsg4326_300mbuffer ALTER COLUMN geom TYPE Geometry(MultiPolygon, 4326) USING ST_Transform(geom, 4326);
+#
+# 4.1. Optional: also reproject to 4269 to match the rest of TIGER/Line
+#
+#     CREATE TABLE tl_2010_us_roads_300mbuffer AS SELECT * FROM tl_2010_us_roads_epsg4326_300mbuffer;
+#     ALTER TABLE tl_2010_us_roads_300mbuffer ALTER COLUMN geom TYPE Geometry(MultiPolygon, 4269) USING ST_Transform(geom, 4269);
 #
 # 5. Export resulting files (Bash)
 #
