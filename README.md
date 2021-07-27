@@ -64,7 +64,7 @@ The first step of the interpolation is ensuring that all data exists in the same
 
 If characteristics are in terms of percentages, we then need to do some extra math to account for this, instead using the equation
 
-![](static/tdwpct.svg)
+![](static/tdwpct.svg) (Eq. 4)
 
 where w<sub>s</sub> refers to the weights generated in Stage 2 and Z<sub>s</sub> refers to the population denominator of the variable being translated y<sub>s</sub>, i.e. the total population for population characteristics, the number of homes for housing characteristics, etc. Essentially, this is the TDW formula where the percentage is translated back into a count in the numerator and then translated back into a percentage by translating the population denominator itself.
 
