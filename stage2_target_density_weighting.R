@@ -171,7 +171,7 @@ tiger_intersections_nlcd$ID <- as.character(tiger_intersections_nlcd$ID)
 #       --stat "area_meters=900*count(pop)" \
 #       --output zcta-bd-areas/zcta5_2000.csv \
 #       --progress | tqdm --total 32038
-areas_2000 <- load_cached_data(
+bd_areas_2000 <- load_cached_data(
   "output/zcta-bd-areas/zcta5_2000.csv",
   function() {
     return(data.table(
@@ -182,7 +182,7 @@ areas_2000 <- load_cached_data(
   save_function = fwrite,
   load_function = fread
 )
-areas_2000[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
+bd_areas_2000[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
 
 # Bash (from output/ directory):
 # $ exactextract --raster pop:bd-pops-conus.tif \
@@ -191,7 +191,7 @@ areas_2000[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
 #       --stat "area_meters=900*count(pop)" \
 #       --output zcta-bd-areas/zcta5_2010.csv \
 #       --progress | tqdm --total 32038
-areas_2010 <- load_cached_data(
+bd_areas_2010 <- load_cached_data(
   "output/zcta-bd-areas/zcta5_2010.csv",
   function() {
     return(data.table(
@@ -202,7 +202,7 @@ areas_2010 <- load_cached_data(
   save_function = fwrite,
   load_function = fread
 )
-areas_2010[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
+bd_areas_2010[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
 
 # Bash (from output/ directory):
 # $ exactextract --raster pop:bd-pops-conus.tif \
@@ -211,7 +211,7 @@ areas_2010[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
 #       --stat "area_meters=900*count(pop)" \
 #       --output zcta-bd-areas/zcta5_2000_2010_intersections.csv \
 #       --progress | tqdm --total 133205
-areas_2000_2010 <- load_cached_data(
+bd_areas_2000_2010 <- load_cached_data(
   "output/zcta-bd-areas/zcta5_2000_2010_intersections.csv",
   function() {
     return(data.table(
@@ -222,7 +222,48 @@ areas_2000_2010 <- load_cached_data(
   save_function = fwrite,
   load_function = fread
 )
-areas_2000_2010[, ID := as.character(ID)]
+bd_areas_2000_2010[, ID := as.character(ID)]
+
+## Calculate BD-refined areas, lenient definition ----
+
+bd_areas_2000_lenient <- load_cached_data(
+  "output/zcta-bd-areas/zcta5_2000.csv",
+  function() {
+    return(data.table(
+      ZCTA5CE00 = tiger_2000_nlcd$ZCTA5CE00,
+      area_meters = 900 * exact_extract(bd_pops_raster, tiger_2000_nlcd, "count")
+    ))
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+bd_areas_2000_lenient[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
+
+bd_areas_2010_lenient <- load_cached_data(
+  "output/zcta-bd-areas/zcta5_2010.csv",
+  function() {
+    return(data.table(
+      ZCTA5CE10 = tiger_2010_nlcd$ZCTA5CE10,
+      area_meters = 900 * exact_extract(bd_pops_raster, tiger_2010_nlcd, "count")
+    ))
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+bd_areas_2010_lenient[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
+
+bd_areas_2000_2010 <- load_cached_data(
+  "output/zcta-bd-areas/zcta5_2000_2010_intersections.csv",
+  function() {
+    return(data.table(
+      ID = tiger_intersections_nlcd$ID,
+      area_meters = 900 * exact_extract(bd_pops_raster, tiger_intersections_nlcd, "count")
+    ))
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+bd_areas_2000_2010_lenient[, ID := as.character(ID)]
 
 ## Calculate BD-interpolated populations ----
 # Deprecated section - intersection population is not needed, so we can just
@@ -299,18 +340,18 @@ intersections <- as.data.table(st_drop_geometry(tiger_intersections)
                                )[, `:=` (ID = as.character(ID),
                                          ZCTA5CE00 = as.character(ZCTA5CE00),
                                          ZCTA5CE10 = as.character(ZCTA5CE10))
-                                 ][areas_2000_2010, on = "ID"]
+                                 ][bd_areas_2000_2010, on = "ID"]
 
 ## Create hash tables to speed up queries ----
 
 # Map of 2000 ZCTAs -> 2000 ZCTA areas
-areas_2000_hash <- hashmap(areas_2000$ZCTA5CE00, areas_2000$area_meters)
+bd_areas_2000_hash <- hashmap(bd_areas_2000$ZCTA5CE00, bd_areas_2000$area_meters)
 
 # Map of 2010 ZCTAs -> 2010 ZCTA areas
-areas_2010_hash <- hashmap(areas_2010$ZCTA5CE10, areas_2010$area_meters)
+bd_areas_2010_hash <- hashmap(bd_areas_2010$ZCTA5CE10, bd_areas_2010$area_meters)
 
 # Map of intersection ID -> 2000-2010 ZCTA intersection areas
-areas_2000_2010_hash <- hashmap(areas_2000_2010$ID, areas_2000_2010$area_meters)
+bd_areas_2000_2010_hash <- hashmap(bd_areas_2000_2010$ID, bd_areas_2000_2010$area_meters)
 
 # Map of 2000 ZCTAs -> 2000 BD-interpolated populations (extraneous?)
 pops_2000_hash <- hashmap(pops_2000$ZCTA5CE00, pops_2000$pop_sum)
@@ -347,9 +388,9 @@ for (zcta in tiger_2000$ZCTA5CE00) {
 }
 
 # Make sure hash tables are working
-stopifnot(sum(is.na(lapply(areas_2000$ZCTA5CE00, function(x) areas_2000_hash[[x]]))) == sum(is.na(areas_2000$area_meters)))
-stopifnot(sum(is.na(lapply(areas_2010$ZCTA5CE10, function(x) areas_2010_hash[[x]]))) == sum(is.na(areas_2010$area_meters)))
-stopifnot(sum(is.na(lapply(areas_2000_2010$ID, function(x) areas_2000_2010_hash[[x]]))) == sum(is.na(areas_2000_2010$area_meters)))
+stopifnot(sum(is.na(lapply(bd_areas_2000$ZCTA5CE00, function(x) bd_areas_2000_hash[[x]]))) == sum(is.na(bd_areas_2000$area_meters)))
+stopifnot(sum(is.na(lapply(bd_areas_2010$ZCTA5CE10, function(x) bd_areas_2010_hash[[x]]))) == sum(is.na(bd_areas_2010$area_meters)))
+stopifnot(sum(is.na(lapply(bd_areas_2000_2010$ID, function(x) bd_areas_2000_2010_hash[[x]]))) == sum(is.na(bd_areas_2000_2010$area_meters)))
 stopifnot(sum(is.na(lapply(pops_2000$ZCTA5CE00, function(x) pops_2000_hash[[x]]))) == sum(is.na(pops_2000$pop_sum)))
 stopifnot(sum(is.na(lapply(pops_2010$ZCTA5CE10, function(x) pops_2010_hash[[x]]))) == sum(is.na(pops_2010$pop_sum)))
 stopifnot(sum(is.na(lapply(intersections$ZCTA5CE00, function(x) zctas_2000_to_2010_hash[[x]]))) == 0)
@@ -357,84 +398,97 @@ stopifnot(sum(is.na(lapply(intersections$ZCTA5CE10, function(x) zctas_2010_to_20
 
 ## Calculation of weights ----
 
+calculate_tdw <- function(areas_2000_hash = bd_areas_2000_hash,
+                          areas_2010_hash = bd_areas_2010_hash,
+                          areas_2000_2010_hash = bd_areas_2000_2010_hash) {
+  bar <- progress_bar$new(
+    "Calculating target-density weights :current/:total (:percent) [:bar] eta :eta",
+    total = nrow(tiger_2010)
+  )
+  result <- lapply(
+    as.character(tiger_2010$ZCTA5CE10),
+    function(target_zcta) {
+      # A_t
+      target_area <- areas_2010_hash[[target_zcta]]
+      
+      # Z_t
+      target_pop <- pops_2010_hash[[target_zcta]]
+      
+      # s (index)
+      source_zctas <- zctas_2010_to_2000_hash[[target_zcta]]
+      
+      # sum_s(A_s,t / A_t * Z_t / sum_tau(A_s,tau / A_tau * Z_tau))
+      weights <- sapply( # Sum over intersecting source ZCTAs (index s)
+        source_zctas,
+        function(source_zcta) {
+          # A_s,t
+          #intersection_area <- intersections[ZCTA5CE10 == target_zcta & ZCTA5CE00 == source_zcta]$area_meters
+          intersection_id <- intersection_id_2000_to_2010_hash[[source_zcta]][[target_zcta]]
+          intersection_area <- areas_2000_2010_hash[[intersection_id]]
+          
+          # A_s,t / A_t * Z_t
+          numerator <- intersection_area / target_area * target_pop
+          
+          denominator <- sum(sapply(
+            # tau (index)
+            zctas_2000_to_2010_hash[[source_zcta]],
+            function(target_zcta_2) { # Sum over intersecting target ZCTAs (index tau)
+              # A_s,tau
+              #intersection_area_2 <- intersections[ZCTA5CE10 == target_zcta_2 & ZCTA5CE00 == source_zcta]$area_meters
+              intersection_id_2 <- intersection_id_2000_to_2010_hash[[source_zcta]][[target_zcta_2]]
+              intersection_area_2 <- areas_2000_2010_hash[[intersection_id_2]]
+              
+              # A_tau
+              target_area_2 <- areas_2010_hash[[target_zcta_2]]
+              
+              # Z_tau
+              target_pop_2 <- pops_2010_hash[[target_zcta_2]]
+              
+              # A_s,tau / A_tau * Z_tau
+              return(intersection_area_2 / target_area_2 * target_pop_2)
+            }
+          ))
+          
+          # A_s,t / A_t * Z_t / sum_tau(A_s,tau / A_tau * Z_tau)
+          return(numerator / denominator)
+        }
+      )
+      
+      bar$tick()
+      
+      result <- data.table(
+        ZCTA5CE10 = target_zcta,
+        ZCTA5CE00 = source_zctas,
+        tdw = weights
+      )
+      if (all(is.na(result$ZCTA5CE00))) {
+        return(NA)
+      } else {
+        return(result)
+      }
+    }
+  )
+  result <- bind_rows(result[!is.na(result)])
+  return(result)
+}
+
+# Pass 1: fully bd-refined
 tdw <- load_cached_data(
   "output/tdw.csv",
   function() {
-    bar <- progress_bar$new(
-      "Calculating target-density weights :current/:total (:percent) [:bar] eta :eta",
-      total = nrow(tiger_2010)
+    calculate_tdw(
+      areas_2000_hash = bd_areas_2000_hash,
+      areas_2010_hash = bd_areas_2010_hash,
+      areas_2000_2010_hash = bd_areas_2000_2010_hash,
     )
-    result <- lapply(
-      as.character(tiger_2010$ZCTA5CE10),
-      function(target_zcta) {
-        # A_t
-        target_area <- areas_2010_hash[[target_zcta]]
-        
-        # Z_t
-        target_pop <- pops_2010_hash[[target_zcta]]
-        
-        # s (index)
-        source_zctas <- zctas_2010_to_2000_hash[[target_zcta]]
-        
-        # sum_s(A_s,t / A_t * Z_t / sum_tau(A_s,tau / A_tau * Z_tau))
-        weights <- sapply( # Sum over intersecting source ZCTAs (index s)
-          source_zctas,
-          function(source_zcta) {
-            # A_s,t
-            #intersection_area <- intersections[ZCTA5CE10 == target_zcta & ZCTA5CE00 == source_zcta]$area_meters
-            intersection_id <- intersection_id_2000_to_2010_hash[[source_zcta]][[target_zcta]]
-            intersection_area <- areas_2000_2010_hash[[intersection_id]]
-            
-            # A_s,t / A_t * Z_t
-            numerator <- intersection_area / target_area * target_pop
-            
-            denominator <- sum(sapply(
-              # tau (index)
-              zctas_2000_to_2010_hash[[source_zcta]],
-              function(target_zcta_2) { # Sum over intersecting target ZCTAs (index tau)
-                # A_s,tau
-                #intersection_area_2 <- intersections[ZCTA5CE10 == target_zcta_2 & ZCTA5CE00 == source_zcta]$area_meters
-                intersection_id_2 <- intersection_id_2000_to_2010_hash[[source_zcta]][[target_zcta_2]]
-                intersection_area_2 <- areas_2000_2010_hash[[intersection_id_2]]
-                
-                # A_tau
-                target_area_2 <- areas_2010_hash[[target_zcta_2]]
-                
-                # Z_tau
-                target_pop_2 <- pops_2010_hash[[target_zcta_2]]
-                
-                # A_s,tau / A_tau * Z_tau
-                return(intersection_area_2 / target_area_2 * target_pop_2)
-              }
-            ))
-            
-            # A_s,t / A_t * Z_t / sum_tau(A_s,tau / A_tau * Z_tau)
-            return(numerator / denominator)
-          }
-        )
-        
-        bar$tick()
-        
-        result <- data.table(
-          ZCTA5CE10 = target_zcta,
-          ZCTA5CE00 = source_zctas,
-          tdw = weights
-        )
-        if (all(is.na(result$ZCTA5CE00))) {
-          return(NA)
-        } else {
-          return(result)
-        }
-      }
-    )
-    result <- bind_rows(result[!is.na(result)])
-    return(result)
-  },
+  }
   save_function = fwrite,
   load_function = fread
 )
 tdw[, `:=` (ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
             ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)))]
+
+# Pass 2:
 
 # Diagnostics -------------------------------------------------------------
 
@@ -551,7 +605,7 @@ if (FALSE) {
   sum(pops_2000[tdw[ZCTA5CE10 == "25661"], on = "ZCTA5CE00"][is.na(tdw)]$pop_sum)
   sum(pops_2000[tdw[is.na(tdw)], on = "ZCTA5CE00"]$pop_sum) - pop_hi_pr
   sum(pops_2000$pop_sum) - pop_hi_pr
-  pop_hi_pr <- sum(pops_2000[areas_2000[is.na(area_meters)], on = "ZCTA5CE00"]$pop_sum)
+  pop_hi_pr <- sum(pops_2000[bd_areas_2000[is.na(bd_area_meters)], on = "ZCTA5CE00"]$pop_sum)
   
   plot_tdw("")
   plot_bd_popdens("")
