@@ -118,7 +118,6 @@ tiger_2010 <- load_cached_data(
   save_function = st_write,
   load_function = st_read
 )
-
 tiger_2010_nlcd <- load_cached_data(
   "output/zctas/zcta5_2010_nlcd.gpkg",
   function() {
@@ -162,7 +161,7 @@ tiger_intersections_nlcd <- load_cached_data(
 )
 tiger_intersections_nlcd$ID <- as.character(tiger_intersections_nlcd$ID)
 
-## Calculate BD-refined areas (inhabited zones) ----
+## Calculate BD-refined areas (inhabited zones; pass 1) ----
 
 # Bash (from output/ directory):
 # $ exactextract --raster pop:bd-pops-conus.tif \
@@ -224,46 +223,108 @@ bd_areas_2000_2010 <- load_cached_data(
 )
 bd_areas_2000_2010[, ID := as.character(ID)]
 
-## Calculate BD-refined areas, lenient definition ----
+## Calculate BD-refined areas, buffers only (pass 2) ----
 
-bd_areas_2000_lenient <- load_cached_data(
-  "output/zcta-bd-areas/zcta5_2000.csv",
+# In PostgreSQL:
+# ...=# \copy (SELECT zcta5ce10, ST_Area(ST_Transform(st_union, 4326)::geography) AS area_meters FROM tl_2010_us_roads_zcta510_intersections_merged) TO '~/projects/imputed-ses/output/zcta-buffer-areas/zcta5_2010.CSV' WITH CSV HEADER
+# ...=# \copy (SELECT zcta5ce00, ST_Area(ST_Transform(st_union, 4326)::geography) AS area_meters FROM tl_2010_us_roads_zcta500_intersections_merged) TO '~/projects/imputed-ses/output/zcta-buffer-areas/zcta5_2000.CSV' WITH CSV HEADER
+# ...=# \copy (SELECT zcta5ce00, zcta5ce10, ST_Area(ST_Transform(st_union, 4326)::geography) AS area_meters FROM tl_2010_us_roads_zcta500_zcta510_intersections_intersections_me) TO '~/projects/imputed-ses/output/zcta-buffer-areas/zcta5_2000_2010_intersections.CSV' WITH CSV HEADER
+
+buffer_areas_2000 <- load_cached_data(
+  "output/zcta-buffer-areas/zcta5_2000.csv",
   function() {
-    return(data.table(
-      ZCTA5CE00 = tiger_2000_nlcd$ZCTA5CE00,
-      area_meters = 900 * exact_extract(bd_pops_raster, tiger_2000_nlcd, "count")
-    ))
+    # TODO R implementation (PostGIS is much faster)
+    stop()
   },
   save_function = fwrite,
   load_function = fread
 )
-bd_areas_2000_lenient[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
+buffer_areas_2000[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
 
-bd_areas_2010_lenient <- load_cached_data(
-  "output/zcta-bd-areas/zcta5_2010.csv",
+buffer_areas_2010 <- load_cached_data(
+  "output/zcta-buffer-areas/zcta5_2010.csv",
   function() {
-    return(data.table(
-      ZCTA5CE10 = tiger_2010_nlcd$ZCTA5CE10,
-      area_meters = 900 * exact_extract(bd_pops_raster, tiger_2010_nlcd, "count")
-    ))
+    # TODO R implementation (PostGIS is much faster)
+    stop()
   },
   save_function = fwrite,
   load_function = fread
 )
-bd_areas_2010_lenient[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
+buffer_areas_2010[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
 
-bd_areas_2000_2010 <- load_cached_data(
-  "output/zcta-bd-areas/zcta5_2000_2010_intersections.csv",
+buffer_areas_2000_2010 <- load_cached_data(
+  "output/zcta-buffer-areas/zcta5_2000_2010_intersections.csv",
   function() {
-    return(data.table(
-      ID = tiger_intersections_nlcd$ID,
-      area_meters = 900 * exact_extract(bd_pops_raster, tiger_intersections_nlcd, "count")
-    ))
+    # TODO R implementation (PostGIS is much faster)
+    stop()
   },
   save_function = fwrite,
   load_function = fread
 )
-bd_areas_2000_2010_lenient[, ID := as.character(ID)]
+buffer_areas_2000_2010 <- buffer_areas_2000_2010[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
+                                                         ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)))
+                                                 ][as.data.table(st_drop_geometry(tiger_intersections)),
+                                                   on = list(ZCTA5CE00, ZCTA5CE10)
+                                                   ][, ID := as.character(ID)]
+
+## Calculate raw areas (pass 3) ----
+
+# In PostgreSQL:
+# ...=# \copy (SELECT zcta5ce00, ST_Area(ST_Transform(geom, 4326)::geography) AS area_meters FROM tl_2010_us_zcta500_valid) TO '~/projects/imputed-ses/output/zcta-areas/zcta5_2000.CSV' WITH CSV HEADER
+# ...=# \copy (SELECT zcta5ce10, ST_Area(ST_Transform(geom, 4326)::geography) AS area_meters FROM tl_2010_us_zcta510_valid) TO '~/projects/imputed-ses/output/zcta-areas/zcta5_2010.CSV' WITH CSV HEADER
+# ...=# \copy (SELECT zcta5ce00, zcta5ce10, ST_Area(ST_Transform(geom, 4326)::geography) AS area_meters FROM tl_2010_us_zcta500_zcta510_intersections) TO '~/projects/imputed-ses/output/zcta-areas/zcta5_2000_2010_intersections.CSV' WITH CSV HEADER
+
+raw_areas_2000 <- load_cached_data(
+  "output/zcta-areas/zcta5_2000.csv",
+  function() {
+    tiger_2000 %>%
+      transmute(
+        ZCTA5CE00,
+        area_meters = as.numeric(st_area(.))
+      ) %>%
+      st_drop_geometry() %>%
+      return()
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+raw_areas_2000[, ZCTA5CE00 := sprintf("%05.f", as.numeric(ZCTA5CE00))]
+
+raw_areas_2010 <- load_cached_data(
+  "output/zcta-areas/zcta5_2010.csv",
+  function() {
+    tiger_2010 %>%
+      transmute(
+        ZCTA5CE10,
+        area_meters = as.numeric(st_area(.))
+      ) %>%
+      st_drop_geometry() %>%
+      return()
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+raw_areas_2010[, ZCTA5CE10 := sprintf("%05.f", as.numeric(ZCTA5CE10))]
+
+raw_areas_2000_2010 <- load_cached_data(
+  "output/zcta-areas/zcta5_2000_2010_intersections.csv",
+  function() {
+    tiger_intersections %>%
+      transmute(
+        ID,
+        area_meters = as.numeric(st_area(.))
+      ) %>%
+      st_drop_geometry() %>%
+      return()
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+raw_areas_2000_2010 <- raw_areas_2000_2010[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
+                                                   ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)))
+                                           ][as.data.table(st_drop_geometry(tiger_intersections)),
+                                             on = list(ZCTA5CE00, ZCTA5CE10)
+                                             ][, ID := as.character(ID)]
 
 ## Calculate BD-interpolated populations ----
 # Deprecated section - intersection population is not needed, so we can just
@@ -346,12 +407,18 @@ intersections <- as.data.table(st_drop_geometry(tiger_intersections)
 
 # Map of 2000 ZCTAs -> 2000 ZCTA areas
 bd_areas_2000_hash <- hashmap(bd_areas_2000$ZCTA5CE00, bd_areas_2000$area_meters)
+buffer_areas_2000_hash <- hashmap(buffer_areas_2000$ZCTA5CE00, buffer_areas_2000$area_meters)
+raw_areas_2000_hash <- hashmap(raw_areas_2000$ZCTA5CE00, raw_areas_2000$area_meters)
 
 # Map of 2010 ZCTAs -> 2010 ZCTA areas
 bd_areas_2010_hash <- hashmap(bd_areas_2010$ZCTA5CE10, bd_areas_2010$area_meters)
+buffer_areas_2010_hash <- hashmap(buffer_areas_2010$ZCTA5CE10, buffer_areas_2010$area_meters)
+raw_areas_2010_hash <- hashmap(raw_areas_2010$ZCTA5CE10, raw_areas_2010$area_meters)
 
 # Map of intersection ID -> 2000-2010 ZCTA intersection areas
 bd_areas_2000_2010_hash <- hashmap(bd_areas_2000_2010$ID, bd_areas_2000_2010$area_meters)
+buffer_areas_2000_2010_hash <- hashmap(buffer_areas_2000_2010$ID, buffer_areas_2000_2010$area_meters)
+raw_areas_2000_2010_hash <- hashmap(raw_areas_2000_2010$ID, raw_areas_2000_2010$area_meters)
 
 # Map of 2000 ZCTAs -> 2000 BD-interpolated populations (extraneous?)
 pops_2000_hash <- hashmap(pops_2000$ZCTA5CE00, pops_2000$pop_sum)
@@ -387,10 +454,16 @@ for (zcta in tiger_2000$ZCTA5CE00) {
   intersection_id_2000_to_2010_hash[[zcta]] <- nested_hash
 }
 
-# Make sure hash tables are working
+# Make sure hash tables are working (also good demo of how fast it is!)
 stopifnot(sum(is.na(lapply(bd_areas_2000$ZCTA5CE00, function(x) bd_areas_2000_hash[[x]]))) == sum(is.na(bd_areas_2000$area_meters)))
 stopifnot(sum(is.na(lapply(bd_areas_2010$ZCTA5CE10, function(x) bd_areas_2010_hash[[x]]))) == sum(is.na(bd_areas_2010$area_meters)))
 stopifnot(sum(is.na(lapply(bd_areas_2000_2010$ID, function(x) bd_areas_2000_2010_hash[[x]]))) == sum(is.na(bd_areas_2000_2010$area_meters)))
+stopifnot(sum(is.na(lapply(buffer_areas_2000$ZCTA5CE00, function(x) buffer_areas_2000_hash[[x]]))) == sum(is.na(buffer_areas_2000$area_meters)))
+stopifnot(sum(is.na(lapply(buffer_areas_2010$ZCTA5CE10, function(x) buffer_areas_2010_hash[[x]]))) == sum(is.na(buffer_areas_2010$area_meters)))
+stopifnot(sum(is.na(lapply(buffer_areas_2000_2010$ID, function(x) buffer_areas_2000_2010_hash[[x]]))) == sum(is.na(buffer_areas_2000_2010$area_meters)))
+stopifnot(sum(is.na(lapply(raw_areas_2000$ZCTA5CE00, function(x) raw_areas_2000_hash[[x]]))) == sum(is.na(raw_areas_2000$area_meters)))
+stopifnot(sum(is.na(lapply(raw_areas_2010$ZCTA5CE10, function(x) raw_areas_2010_hash[[x]]))) == sum(is.na(raw_areas_2010$area_meters)))
+stopifnot(sum(is.na(lapply(raw_areas_2000_2010$ID, function(x) raw_areas_2000_2010_hash[[x]]))) == sum(is.na(raw_areas_2000_2010$area_meters)))
 stopifnot(sum(is.na(lapply(pops_2000$ZCTA5CE00, function(x) pops_2000_hash[[x]]))) == sum(is.na(pops_2000$pop_sum)))
 stopifnot(sum(is.na(lapply(pops_2010$ZCTA5CE10, function(x) pops_2010_hash[[x]]))) == sum(is.na(pops_2010$pop_sum)))
 stopifnot(sum(is.na(lapply(intersections$ZCTA5CE00, function(x) zctas_2000_to_2010_hash[[x]]))) == 0)
@@ -473,20 +546,50 @@ calculate_tdw <- function(areas_2000_hash = bd_areas_2000_hash,
 }
 
 # Pass 1: fully bd-refined
-tdw <- load_cached_data(
-  "output/tdw.csv",
+tdw_pass1 <- load_cached_data(
+  "output/tdw1-bd-areas.csv",
   function() {
-    calculate_tdw(
+    return(calculate_tdw(
       areas_2000_hash = bd_areas_2000_hash,
       areas_2010_hash = bd_areas_2010_hash,
       areas_2000_2010_hash = bd_areas_2000_2010_hash,
-    )
-  }
+    ))
+  },
   save_function = fwrite,
   load_function = fread
 )
-tdw[, `:=` (ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
-            ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)))]
+tdw_pass1[, `:=` (ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+                  ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)))]
+
+tdw_pass2 <- load_cached_data(
+  "output/tdw2-buffer-areas.csv",
+  function() {
+    return(calculate_tdw(
+      areas_2000_hash = buffer_areas_2000_hash,
+      areas_2010_hash = buffer_areas_2010_hash,
+      areas_2000_2010_hash = buffer_areas_2000_2010_hash
+    ))
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+tdw_pass2[, `:=` (ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+                  ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)))]
+
+tdw_pass3 <- load_cached_data(
+  "output/tdw3-raw-areas.csv",
+  function() {
+    return(calculate_tdw(
+      areas_2000_hash = raw_areas_2000_hash,
+      areas_2010_hash = raw_areas_2010_hash,
+      areas_2000_2010_hash = raw_areas_2000_2010_hash
+    ))
+  },
+  save_function = fwrite,
+  load_function = fread
+)
+tdw_pass3[, `:=` (ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+                  ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)))]
 
 # Pass 2:
 
@@ -499,7 +602,7 @@ library(viridis)
 tiger_2000_dt <- as.data.table(tiger_2000)
 tiger_2000_nlcd_dt <- as.data.table(tiger_2000_nlcd)
 
-plot_tdw <- function(debug_zcta) {
+plot_tdw <- function(tdw, debug_zcta) {
   # sf of the target ZCTA
   debug_target <- filter(tiger_2010, ZCTA5CE10 == debug_zcta)
   print(debug_target)
@@ -533,7 +636,7 @@ plot_tdw <- function(debug_zcta) {
     return()
 }
 
-plot_bd_popdens <- function(debug_zcta) {
+plot_bd_popdens <- function(tdw, debug_zcta) {
   debug_target_nlcd <- filter(tiger_2010_nlcd, ZCTA5CE10 == debug_zcta)
   
   debug_tdw_sf_nlcd <- st_as_sf(
@@ -569,12 +672,12 @@ plot_bd_popdens <- function(debug_zcta) {
 # Unreachable code so doesn't run in non-interactive mode
 if (FALSE) {
   # Harvard T.H. Chan
-  plot_tdw("02115")
-  plot_bd_popdens("02115")
+  plot_tdw(tdw_pass1, "02115")
+  plot_bd_popdens(tdw_pass1, "02115")
   
   # Random
-  plot_tdw("76034")
-  plot_bd_popdens("76034")
+  plot_tdw(tdw_pass1, "76034")
+  plot_bd_popdens(tdw_pass1, "76034")
   
   # Number of 2000 ZCTAs per 2010 ZCTA
   tdw[, .N, by = "ZCTA5CE10"][order(N)]
