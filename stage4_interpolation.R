@@ -62,25 +62,32 @@ tdw <- Reduce(
 )
 
 # 2000 geographies with missing 2010 geographies: pull the population from 2010
-tdw <- bind_rows(
-  tdw,
-  nhgis_2010[matched[missing == "ZCTA5CE10"][, geoid := ZCTA5CE10],
-             on = "geoid"
-             ][, .(ZCTA5CE00,
-                   ZCTA5CE10,
-                   matched_population = population,
-                   matched_houses = houses)
-               ]
+tdw <- rbindlist(
+  list(
+    tdw,
+    nhgis_2010[matched[missing == "ZCTA5CE10"][, geoid := ZCTA5CE10],
+               on = "geoid"
+               ][, .(ZCTA5CE00,
+                     ZCTA5CE10,
+                     matched_population = population,
+                     matched_houses = houses)
+                 ]
+  ),
+  fill = TRUE
 )
-
+  
 # 2010 geographies with missing 2000 geographies: leave a marker indicating that
 # we will later pull the population directly
-tdw <- bind_rows(
-  tdw,
-  matched[missing == "ZCTA5CE00", .(ZCTA5CE00,
-                                    ZCTA5CE10,
-                                    matched_2000_to_2010 = TRUE)]
+tdw <- rbindlist(
+  list(
+    tdw,
+    matched[missing == "ZCTA5CE00", .(ZCTA5CE00,
+                                      ZCTA5CE10,
+                                      matched_2010_to_2000 = TRUE)]
+  ),
+  fill = TRUE
 )
+tdw[, matched_2010_to_2000 := ifelse(is.na(matched_2010_to_2000), FALSE, matched_2010_to_2000)]
 
 # Convert 2000 Census to 2010 geography equivalent ------------------------
 
@@ -98,43 +105,46 @@ imputable_housing_vars <- imputable_vars[
 ## Initial setup ----
 
 # Join TDWs
-nhgis_2000_2010equiv <- nhgis_2000[tdw, on = c("geoid" = "ZCTA5CE00")]
+tdw_joined <- nhgis_2000[tdw, on = c("geoid" = "ZCTA5CE00")]
 
 # Join information about which pass TDW to use
-nhgis_2000_2010equiv <- tdw[, list(tdw1_ok = !any(is.na(tdw1)),
-                                   tdw2_ok = !any(is.na(tdw2)),
-                                   tdw3_ok = !any(is.na(tdw3))),
-                            by = "ZCTA5CE10"
-                            ][nhgis_2000_2010equiv, on = "ZCTA5CE10"]
+tdw_joined <- tdw[, .(tdw1_ok = !any(is.na(tdw1)),
+                      tdw2_ok = !any(is.na(tdw2)),
+                      tdw3_ok = !any(is.na(tdw3))),
+                  by = "ZCTA5CE10"
+                  ][tdw_joined, on = "ZCTA5CE10"
+                    ][, tdw := fcase(tdw1_ok == TRUE, tdw1,
+                                     tdw2_ok == TRUE, tdw2,
+                                     tdw3_ok == TRUE, tdw3)]
 
-# Calculate and houses population by TDW
-nhgis_2000_2010equiv <- nhgis_2000_2010equiv[, .(# Population
-                                                 population = first(fcase(
-                                                   matched_2000_to_2010 == TRUE, as.double(population),
-                                                   !is.na(matched_population), as.double(matched_population),
-                                                   tdw1_ok == TRUE, sum(population * tdw1),
-                                                   tdw2_ok == TRUE, sum(population * tdw2),
-                                                   tdw3_ok == TRUE, sum(population * tdw3)
-                                                 )),
-                                                 
-                                                 # Houses
-                                                 houses = first(fcase(
-                                                   matched_2000_to_2010 == TRUE, as.double(houses),
-                                                   !is.na(matched_houses), as.double(matched_houses),
-                                                   tdw1_ok == TRUE, sum(houses * tdw1),
-                                                   tdw2_ok == TRUE, sum(houses * tdw2),
-                                                   tdw3_ok == TRUE, sum(houses * tdw3)
-                                                 )),
-                                                 
-                                                 # Interpolation method
-                                                 method = as.factor(first(fcase(
-                                                   matched_2000_to_2010 == TRUE, "matched2000to2010",
-                                                   !is.na(matched_houses), "matched2010to2000",
-                                                   tdw1_ok == TRUE, "TDWpass1",
-                                                   tdw2_ok == TRUE, "TDWpass2",
-                                                   tdw3_ok == TRUE, "TDWpass3"
-                                                 )))),
-                                             by = "ZCTA5CE10"]
+# Calculate population and houses by TDW
+nhgis_2000_2010equiv <- tdw_joined[, .(# Population
+                                       population = first(fcase(
+                                         matched_2010_to_2000 == TRUE, as.double(population),
+                                         !is.na(matched_population), as.double(matched_population),
+                                         tdw1_ok == TRUE, sum(population * tdw1),
+                                         tdw2_ok == TRUE, sum(population * tdw2),
+                                         tdw3_ok == TRUE, sum(population * tdw3)
+                                       )),
+                                       
+                                       # Houses
+                                       houses = first(fcase(
+                                         matched_2010_to_2000 == TRUE, as.double(houses),
+                                         !is.na(matched_houses), as.double(matched_houses),
+                                         tdw1_ok == TRUE, sum(houses * tdw1),
+                                         tdw2_ok == TRUE, sum(houses * tdw2),
+                                         tdw3_ok == TRUE, sum(houses * tdw3)
+                                       )),
+                                       
+                                       # Interpolation method
+                                       method = as.factor(first(fcase(
+                                         matched_2010_to_2000 == TRUE, "matched2010to2000",
+                                         !is.na(matched_houses), "matched2000to2010",
+                                         tdw1_ok == TRUE, "TDWpass1",
+                                         tdw2_ok == TRUE, "TDWpass2",
+                                         tdw3_ok == TRUE, "TDWpass3"
+                                       )))),
+                                   by = "ZCTA5CE10"]
 
 ### Diagnostics ----
 if (FALSE) {
@@ -162,37 +172,61 @@ if (FALSE) {
 }
 
 ## Interpolate population-related variables ----
+
+nhgis_2010_matched <- nhgis_2010[, ZCTA5CE10 := geoid
+                                 ][nhgis_2000_2010equiv[method == "matched2010to2000"], on = "ZCTA5CE10"]
+acs_only_variables <- c("ZCTA5CE10", setdiff(imputable_vars, names(nhgis_2010_matched)))
+nhgis_2010_matched <- acs5[, ZCTA5CE10 := geoid
+                           ][year == 2011, ..acs_only_variables # FIXME: we only had 2011-2019 data, 2009-2010 was missing
+                            ][nhgis_2010_matched, on = "ZCTA5CE10"]
+
 bar <- progress_bar$new(
-  "Interpolating 2000 -> 2010 Census variables :current/:total (:percent) [:bar] eta :eta",
+  "Interpolating 2000 -> 2010 Census population variables :current/:total (:percent) [:bar] eta :eta",
   total = length(imputable_population_vars)
 )
 for (variable in imputable_population_vars) {
-  # Original TDW: hat y_t = sum_s(w_s * y_s)
-  # TDW with precalculated weights: hat y_t = sum_s(w_s * y_s * z_s) / sum(w_s * z_s)
-  tdw_interpolated <- tdw_joined[,
-                                 setNames(list(
-                                   sum(get(variable) * population * tdw, na.rm = TRUE)
-                                   / sum(population * tdw, na.rm = TRUE)
-                                 ), variable),
-                                 by = "ZCTA5CE10"]
+  tdw_interpolated <- rbindlist(list(
+    # Original TDW: hat y_t = sum_s(w_s * y_s)
+    # TDW with precalculated weights: hat y_t = sum_s(w_s * y_s * z_s) / sum(w_s * z_s)
+    tdw_joined[matched_2010_to_2000 == FALSE,
+               setNames(
+                 list(
+                   # Need to convert integers to doubles to avoid overflow
+                   sum(as.double(get(variable)) * population * tdw, na.rm = TRUE) / sum(population * tdw, na.rm = TRUE)
+                 ),
+                 variable
+               ),
+               by = "ZCTA5CE10"],
+    
+    # For matched 2010 -> 2000, just pull directly from 2010
+    nhgis_2010_matched[, setNames(list(ZCTA5CE10, get(variable)), c("ZCTA5CE10", variable))]
+  ))
   nhgis_2000_2010equiv <- nhgis_2000_2010equiv[tdw_interpolated, on = "ZCTA5CE10"]
   bar$tick()
 }
 
 ## Interpolate housing-related variables ----
 bar <- progress_bar$new(
-  "Interpolating 2000 -> 2010 Census variables :current/:total (:percent) [:bar] eta :eta",
+  "Interpolating 2000 -> 2010 Census housing variables :current/:total (:percent) [:bar] eta :eta",
   total = length(imputable_housing_vars)
 )
 for (variable in imputable_housing_vars) {
-  # Original TDW: hat y_t = sum_s(w_s * y_s)
-  # TDW with precalculated weights: hat y_t = sum_s(w_s * y_s * z_s) / sum(w_s * z_s)
-  tdw_interpolated <- tdw_joined[,
-                                 setNames(list(
-                                   sum(get(variable) * houses * tdw, na.rm = TRUE)
-                                   / sum(houses * tdw, na.rm = TRUE)
-                                 ), variable),
-                                 by = "ZCTA5CE10"]
+  tdw_interpolated <- rbindlist(list(
+    # Original TDW: hat y_t = sum_s(w_s * y_s)
+    # TDW with precalculated weights: hat y_t = sum_s(w_s * y_s * z_s) / sum(w_s * z_s)
+    tdw_joined[matched_2010_to_2000 == FALSE,
+               setNames(
+                 list(
+                   # Need to convert integers to doubles to avoid overflow
+                   sum(as.double(get(variable)) * houses * tdw, na.rm = TRUE) / sum(houses * tdw, na.rm = TRUE)
+                 ),
+                 variable
+               ),
+               by = "ZCTA5CE10"],
+    
+    # For matched 2010 -> 2000, just pull directly from 2010
+    nhgis_2010_matched[, setNames(list(ZCTA5CE10, get(variable)), c("ZCTA5CE10", variable))]
+  ))
   nhgis_2000_2010equiv <- nhgis_2000_2010equiv[tdw_interpolated, on = "ZCTA5CE10"]
   bar$tick()
 }
@@ -222,8 +256,8 @@ nhgis_2000_2010equiv[, `:=` (year = 2000,
                              source = "census",
                              weight = 4)]
 
-all_columns <- names(nhgis_2000_2010equiv)
-combined <- bind_rows(list(nhgis_2000_2010equiv, acs5[, ..all_columns]))
+all_columns <- setdiff(names(nhgis_2000_2010equiv), "method")
+combined <- rbindlist(list(nhgis_2000_2010equiv, acs5[, ..all_columns]), fill = TRUE)
 
 # For some reason, this gives us an error about the geoid index being invalid,
 # so we need to rebuild the data.table
@@ -262,7 +296,7 @@ bar <- progress_bar$new(
 )
 
 # Single-core implementation
-# interpolated <- bind_rows(lapply(
+# interpolated <- rbindlist(lapply(
 #   geoids,
 #   function(geoid) {
 #     bar$tick()
@@ -283,7 +317,7 @@ interpolated <- foreach(
   return(interpolate_census(geoid))
 }
 stopCluster(cluster)
-interpolated <- bind_rows(interpolated)[, source := "imputed"]
+interpolated <- rbindlist(interpolated)[, source := "imputed"]
 fwrite(interpolated, "output/interpolated.csv")
 
 ## Diagnostics ----
