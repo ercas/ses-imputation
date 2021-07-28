@@ -10,8 +10,6 @@ cores <- 40
 
 # Load data ---------------------------------------------------------------
 
-tdw <- fread("output/tdw.csv")
-
 nhgis_2000 <- fread("/media/qnap3/Covariates/nhgis/output/2000_zcta.csv.gz"
                     )[, `:=` (geoid = sprintf("%05.f", as.numeric(GEOID)),
                               source = "census",
@@ -35,11 +33,54 @@ acs5 <- fread("/media/qnap3/Covariates/census-ses-covariates/outputs/tables-us/t
                         weight = 2)
                 ][, `:=` (population = population.x,
                           houses = n_housing_units)]
-fread("/media/qnap3/Covariates/census-ses-covariates/outputs/tables-us/time_series_2009_to_2019_zip_codes_long.csv.gz")
 
-tdw <- fread("output/tdw.csv"
-              )[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
-                        ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)))]
+tdw_pass1 <- fread("output/tdw1-bd-areas.csv"
+                   )[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
+                             ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+                             tdw1 = tdw)]
+
+tdw_pass2 <- fread("output/tdw2-buffer-areas.csv",
+                   )[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
+                             ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+                             tdw2 = tdw)]
+
+tdw_pass3 <- fread("output/tdw3-raw-areas.csv",
+                   )[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
+                             ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)),
+                             tdw3 = tdw)]
+
+matched <- fread("output/matches.csv")[, `:=` (ZCTA5CE00 = sprintf("%05.f", as.numeric(ZCTA5CE00)),
+                                               ZCTA5CE10 = sprintf("%05.f", as.numeric(ZCTA5CE10)))]
+
+# Merge TDWs into one data.table
+tdw <- Reduce(
+  function(left, right) return(left[right, on = list(ZCTA5CE10, ZCTA5CE00)]),
+  lapply(
+    list(tdw_pass1, tdw_pass2, tdw_pass3),
+    function(dt) return(dt[, !"tdw"])
+  )
+)
+
+# 2000 geographies with missing 2010 geographies: pull the population from 2010
+tdw <- bind_rows(
+  tdw,
+  nhgis_2010[matched[missing == "ZCTA5CE10"][, geoid := ZCTA5CE10],
+             on = "geoid"
+             ][, .(ZCTA5CE00,
+                   ZCTA5CE10,
+                   matched_population = population,
+                   matched_houses = houses)
+               ]
+)
+
+# 2010 geographies with missing 2000 geographies: leave a marker indicating that
+# we will later pull the population directly
+tdw <- bind_rows(
+  tdw,
+  matched[missing == "ZCTA5CE00", .(ZCTA5CE00,
+                                    ZCTA5CE10,
+                                    matched_2000_to_2010 = TRUE)]
+)
 
 # Convert 2000 Census to 2010 geography equivalent ------------------------
 
@@ -54,9 +95,71 @@ imputable_housing_vars <- imputable_vars[
   (grepl("housing", imputable_vars) | grepl("heating", imputable_vars))
 ]
 
-# Set up initial data.table with only `population` and `houses`
-nhgis_2000_2010equiv <- nhgis_2000[tdw, on = c("geoid" = "ZCTA5CE00")][, list(population = sum(population * tdw)), by = "ZCTA5CE10"]
-nhgis_2000_2010equiv <- nhgis_2000_2010equiv[tdw_joined[, list(houses = sum(houses * tdw)), by = "ZCTA5CE10"], on = "ZCTA5CE10"]
+## Initial setup ----
+
+# Join TDWs
+nhgis_2000_2010equiv <- nhgis_2000[tdw, on = c("geoid" = "ZCTA5CE00")]
+
+# Join information about which pass TDW to use
+nhgis_2000_2010equiv <- tdw[, list(tdw1_ok = !any(is.na(tdw1)),
+                                   tdw2_ok = !any(is.na(tdw2)),
+                                   tdw3_ok = !any(is.na(tdw3))),
+                            by = "ZCTA5CE10"
+                            ][nhgis_2000_2010equiv, on = "ZCTA5CE10"]
+
+# Calculate and houses population by TDW
+nhgis_2000_2010equiv <- nhgis_2000_2010equiv[, .(# Population
+                                                 population = first(fcase(
+                                                   matched_2000_to_2010 == TRUE, as.double(population),
+                                                   !is.na(matched_population), as.double(matched_population),
+                                                   tdw1_ok == TRUE, sum(population * tdw1),
+                                                   tdw2_ok == TRUE, sum(population * tdw2),
+                                                   tdw3_ok == TRUE, sum(population * tdw3)
+                                                 )),
+                                                 
+                                                 # Houses
+                                                 houses = first(fcase(
+                                                   matched_2000_to_2010 == TRUE, as.double(houses),
+                                                   !is.na(matched_houses), as.double(matched_houses),
+                                                   tdw1_ok == TRUE, sum(houses * tdw1),
+                                                   tdw2_ok == TRUE, sum(houses * tdw2),
+                                                   tdw3_ok == TRUE, sum(houses * tdw3)
+                                                 )),
+                                                 
+                                                 # Interpolation method
+                                                 method = as.factor(first(fcase(
+                                                   matched_2000_to_2010 == TRUE, "matched2000to2010",
+                                                   !is.na(matched_houses), "matched2010to2000",
+                                                   tdw1_ok == TRUE, "TDWpass1",
+                                                   tdw2_ok == TRUE, "TDWpass2",
+                                                   tdw3_ok == TRUE, "TDWpass3"
+                                                 )))),
+                                             by = "ZCTA5CE10"]
+
+### Diagnostics ----
+if (FALSE) {
+  library(dplyr)
+  library(mapview)
+  
+  tiger_2010 <- st_read("output/zctas/zcta5_2000.gpkg")
+  
+  table(nhgis_2000_2010equiv$method, exclude = "no")
+  round(table(nhgis_2000_2010equiv$method, exclude = "no") / nrow(nhgis_2000_2010equiv) * 100, 2)
+  
+  # Where / what are the missing geographies?
+  missing_geographies <- tiger_2010 %>%
+    filter(ZCTA5CE10 %in% nhgis_2000_2010equiv[is.na(method)]$ZCTA5CE10) %>%
+    left_join(
+      transmute(nhgis_2010, population, ZCTA5CE10 = geoid),
+      by = "ZCTA5CE10"
+    )
+  
+  missing_geographies %>%
+    select(ZCTA5CE10, population) %>%
+    st_drop_geometry()
+  
+  mapview(missing_geographies)
+}
 
 ## Interpolate population-related variables ----
 bar <- progress_bar$new(

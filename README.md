@@ -56,7 +56,18 @@ In short, in stage 3 we combine the methodologies of IPUMS and Ruther et al., 20
 
 To save on processing time, we store the C-BD-TDW outputs separately, consisting of weights (the part in the equations between the summation and y<sub>s</sub>) and GEOIDs of the corresponding geographies in the source and target universes. These can then be reused to translate each geography characteristic separately.
 
-### Stage 3: Interpolation of Census data for missing years (BD-CTDW)
+### Stage 3: Matching of remaining geographies
+
+A few TIGER/Line 2000 geographies have zero overlap with 2010 geographies due to significant changes between regionalizations, and vice versa. There is only a small number of geographies with tihs issue, but for completeness, we opt to match them to existing geographies.
+
+In these cases, the 2000 geographies are matched to the 2010 geographies via k-nearest-neighbour with k=1 and straight-line distance on centroids. The same process is repeated to match 2010 geographies to 2000 geographies.
+
+**Possible future improvements**:
+
+* Use a cascaded approach to finding centroids in a manner similar to in C-BD-TDW, using first the centroid of inhabited areas, then the centroid of 300-meter road buffers, then the centroid of the overall geography
+* Use a distance function to discard unmatched geographies for which there are no nearby geographies with 
+
+### Stage 4: Interpolation of Census data for missing years (C-BD-TDW)
 
 In the third stage, we can finally interpolate Census data from years not covered by the Decennial Census or American Community Survey.
 
