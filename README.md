@@ -65,7 +65,7 @@ In these cases, the 2000 geographies are matched to the 2010 geographies via k-n
 **Possible future improvements**:
 
 * Use a cascaded approach to finding centroids in a manner similar to in C-BD-TDW, using first the centroid of inhabited areas, then the centroid of 300-meter road buffers, then the centroid of the overall geography
-* Use a distance function to discard unmatched geographies for which there are no nearby geographies with 
+* Use a distance function to discard unmatched geographies for which there are no nearby geographies with similar enough characteristics
 
 ### Stage 4: Interpolation of Census data for missing years (C-BD-TDW)
 
