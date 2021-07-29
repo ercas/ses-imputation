@@ -77,15 +77,16 @@ If characteristics are in terms of percentages, we then need to do some extra ma
 
 ![](static/tdwpct.svg) (Eq. 4)
 
-where w<sub>s</sub> refers to the weights generated in Stage 2 and Z<sub>s</sub> refers to the population denominator of the variable being translated y<sub>s</sub>, i.e. the total population for population characteristics, the number of homes for housing characteristics, etc. Essentially, this is the TDW formula where the percentage is translated back into a count in the numerator and then translated back into a percentage by translating the population denominator itself.
+where w<sub>s</sub> refers to the weights generated in Stage 2 and Z<sub>s</sub> refers to the population denominator of the variable being translated y<sub>s</sub>, i.e. the total population for population characteristics, the number of homes for housing characteristics, etc. Essentially, this is the TDW formula where the percentage is translated back into a count in the numerator, divided by the translated total population in the denominator.
 
 From here, we then linearly interpolate the missing via simple weighted least-squares regression models where the year is the sole predictor of the geography characteristic, which is the response variable. Data from different Census data sets are weighted as follows:
 
 | Source                                     | Weight |
 |--------------------------------------------|--------|
 | Decennial Census                           | 4      |
-| American Community Survey, 5-year estimate | 2      |
-| American Community Survey, 1-year estimate | 1      |
+| American Community Survey 5-year estimates | 2      |
+
+The American Community Survey 1-year estimates were originally also going to be included with a weight of 1, but we opted not to include them due to additional noise without any gain in the number of years covered - ZCTAs are not available from either the ACS5 or ACS1 in years prior to 2011.
 
 ## Diagnostics
 
