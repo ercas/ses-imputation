@@ -254,10 +254,26 @@ if (FALSE) {
 setnames(nhgis_2000_2010equiv, "ZCTA5CE10", "geoid")
 nhgis_2000_2010equiv[, `:=` (year = 2000,
                              source = "census",
-                             weight = 4)]
+                             weight = 4,
+                             method = "source")]
+acs5[, method := "source"]
+nhgis_2010[, `:=` (year = 2010,
+                   method = "source")]
 
-all_columns <- setdiff(names(nhgis_2000_2010equiv), "method")
-combined <- rbindlist(list(nhgis_2000_2010equiv, acs5[, ..all_columns]), fill = TRUE)
+all_columns <- names(nhgis_2000_2010equiv)
+
+# The 2010 Decennial Census doesn't have all variables as many were offloaded to
+# the American Community Survey
+all_columns_decennial_2010 <- intersect(all_columns, names(nhgis_2010))
+
+combined <- rbindlist(
+  list(
+    nhgis_2000_2010equiv,
+    acs5[, ..all_columns],
+    nhgis_2010[, ..all_columns_decennial_2010]
+  ),
+  fill = TRUE
+)
 
 # For some reason, this gives us an error about the geoid index being invalid,
 # so we need to rebuild the data.table
@@ -319,13 +335,14 @@ interpolated <- foreach(
 stopCluster(cluster)
 interpolated <- rbindlist(interpolated)[, source := "imputed"]
 fwrite(interpolated, "output/interpolated.csv")
+fwrite(combined, "output/rawdata_combined.csv")
 
 ## Diagnostics ----
 
-library(ggplot2)
-
 # Unreachable code so doesn't run in non-interactive mode
 if (FALSE) {
+  library(ggplot2)
+
   # National correlations
   # DT[i, j, by] -> "combined" are prefixed with "i."
   comparison <- interpolated[combined, on = c("geoid", "year")]
@@ -351,11 +368,15 @@ if (FALSE) {
         variables_to_interpolate,
         function(variable) {
           variable_source <- paste0("i.", variable)
-          return(cor(
-            comparison_subset[[variable]],
-            comparison_subset[[variable_source]],
-            use = "complete.obs"
-          ))
+          if (all(is.na(comparison_subset[[variable_source]]))) {
+            return(NA)
+          } else {
+            return(cor(
+              comparison_subset[[variable]],
+              comparison_subset[[variable_source]],
+              use = "complete.obs"
+            ))
+          }
         }
       )
     )
@@ -366,14 +387,14 @@ if (FALSE) {
   fwrite(correlations_df, "diagnostics/overall_correlations.csv")
   
   # National scatter plot
-  yearly_means_interpolated <- interpolated[, !c("geoid", "source")
+  yearly_means_interpolated <- interpolated[, !c("geoid", "method", "source")
                                             ][, lapply(.SD, mean, na.rm = TRUE), by = "year"
                                               ][, source := "imputed"]
-  yearly_means <- combined[, !c("geoid", "source")
+  yearly_means <- combined[, !c("geoid", "method", "source")
                            ][, lapply(.SD, mean, na.rm = TRUE), by = "year"
                              ][, source := ifelse(year == 2000, "census", "acs5")]
   ggplot() +
-    aes(x = year, y = pct_heating_solar, color = source) +
+    aes(x = year, y = pct_female, color = source) +
     geom_point(data = yearly_means_interpolated) +
     geom_point(data = yearly_means)
   
