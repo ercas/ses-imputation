@@ -6,11 +6,11 @@ Imputation of missing Census data in years not available in the decennial Census
 
 This repository contains code used to impute missing years of census data and code used to generate weights and crosswalks between different regionalizations of the same data topic. The latter is necessary because the U.S. Census TIGER/Line boundaries underwent significant changes in 2010 and many of the 2000 geographies do not resemble their 2010 equivalents.
 
-The crosswalk process uses Binary Dasymetric (BD) refinemant combined with a variation of Target-Density Weighting (TDW, Schroeder 2007), building on work from Ruther 2015 and IPUMS.
+The crosswalk process uses Binary Dasymetric (BD) refinement combined with a variation of Target-Density Weighting (TDW, Schroeder 2007), building on work from Ruther 2015 and IPUMS.
 
 ## Process
 
-#### Stage 1: Binary Dasymetric (BD) refinemant of inhabited zones
+#### Stage 1: Binary Dasymetric (BD) refinement of inhabited zones
 
 In the first stage, "inhabited zones" are created from a combination of 2010 U.S. Census Bureau [TIGER/Line shapefiles](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) and the 2001 MRLC [NLCD percent developed imperviousness](https://www.mrlc.gov/data/nlcd-2001-percent-developed-imperviousness-conus) and [NLCD land cover](https://www.mrlc.gov/data/nlcd-2001-land-cover-conus) rasters, following the methodology from IPUMS.
 
